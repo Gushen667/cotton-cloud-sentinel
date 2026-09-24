@@ -8,6 +8,12 @@ import os
 import numpy as np
 from pathlib import Path
 
+# cv2 可选降级（Streamlit Cloud 等无 GUI 环境安装失败时不影响核心识别）
+try:
+    import cv2
+except Exception:
+    cv2 = None
+
 # 模型路径：训练完成后这里会有 whitefly_real 的 best.pt
 # 按优先级查找
 MODEL_CANDIDATES = [
@@ -48,6 +54,8 @@ def get_model():
     return _MODEL, path
 
 
+# cv2 可选降级（见文件顶部 try/except import cv2）
+
 def check_image_quality(image_path):
     """
     图像质量检查（防止漏检/坏图误判为"低风险"）
@@ -58,8 +66,10 @@ def check_image_quality(image_path):
       ok: 综合是否可信
       reason: 不通过的原因
     """
-    import cv2
-    import numpy as np
+    if cv2 is None:
+        # 无 cv2 时降级：不做质量校验，直接标记为可信（不影响核心识别）
+        return {"sharpness": 0, "brightness": 0, "yellow_ratio": 0.5,
+                "ok": True, "reason": "质量检测不可用（无cv2），按可信处理"}
     # 排除标注图混入
     if "._det" in str(image_path) or ".overlay" in str(image_path):
         image_path = str(image_path).replace("._det", "").replace(".overlay", "")
@@ -151,7 +161,9 @@ def draw_detection_overlay(image_path, boxes, conf=0.25, out_path=None):
     在原始图片上画检测框（红框+置信度），叠加标注虫量。
     没有检出时显示"未检出目标"水印。
     """
-    import cv2
+    if cv2 is None:
+        # 无 cv2 时无法画框，返回 None（app 端已有"识别失败或图片无法读取"兜底提示）
+        return None
     img = cv2.imread(str(image_path))
     if img is None:
         return None
