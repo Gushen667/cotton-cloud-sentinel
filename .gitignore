@@ -1,18 +1,33 @@
-__pycache__/
-*.pyc
-temp_upload*
+# ===== 数据集（只保留3张示例照片）=====
+dataset/generated/
 dataset/yellow_sticky_traps/labels/
-dataset/yellow_sticky_traps/images/*.jpg
+dataset/yellow_sticky_traps/labels_backup/
+dataset/yellow_sticky_traps/labels.cache
+dataset/yellow_sticky_traps/images/*
 !dataset/yellow_sticky_traps/images/1187.jpg
 !dataset/yellow_sticky_traps/images/1004.jpg
 !dataset/yellow_sticky_traps/images/1252.jpg
-dataset/yellow_sticky_traps/data.yaml
-data.yaml
+
+# ===== 训练产物（只保留要用的 best.pt）=====
+runs/detect/runs/train/whitefly_real/
+runs/detect/runs/train/whitefly_real-2/*
+!runs/detect/runs/train/whitefly_real-2/weights/
+!runs/detect/runs/train/whitefly_real-2/weights/best.pt
+runs/detect/val/
 runs/train/
 runs/model/
+
+# ===== 临时/开发文件 =====
+__pycache__/
+*.pyc
+temp_upload*
+init_repo.bat
+git_init.log
+
+# ===== 不需要上传的大文件/资料 =====
 demos/
 references/
 scripts/
 yolo11n.pt
-*.md
+data.yaml
 启动.bat
