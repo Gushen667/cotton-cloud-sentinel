@@ -5,6 +5,9 @@
 # ============================================================
 
 import os
+import hashlib
+import tempfile
+
 import numpy as np
 from pathlib import Path
 
@@ -56,6 +59,36 @@ def get_model():
 
 # cv2 可选降级（见文件顶部 try/except import cv2）
 
+def _imread_unicode(path):
+    """cv2.imread 在 Windows 上读不了含中文/非ASCII的路径，改走内存字节流。"""
+    if cv2 is None:
+        return None
+    try:
+        data = np.fromfile(str(path), dtype=np.uint8)
+    except Exception:
+        return None
+    if data.size == 0:
+        return None
+    return cv2.imdecode(data, cv2.IMREAD_COLOR)
+
+
+def _imwrite_unicode(path, img):
+    """与 _imread_unicode 对应：imencode 后写字节，避免 imwrite 的路径限制。"""
+    if cv2 is None or img is None:
+        return False
+    ext = os.path.splitext(str(path))[1] or ".jpg"
+    ok, buf = cv2.imencode(ext, img)
+    if not ok:
+        return False
+    buf.tofile(str(path))
+    return True
+
+
+def _overlay_path(image_path):
+    """叠加图统一写到系统临时目录，避免污染数据集目录。"""
+    key = hashlib.sha1(str(image_path).encode("utf-8")).hexdigest()[:12]
+    return os.path.join(tempfile.gettempdir(), f"wf_overlay_{key}.jpg")
+
 def check_image_quality(image_path):
     """
     图像质量检查（防止漏检/坏图误判为"低风险"）
@@ -73,7 +106,7 @@ def check_image_quality(image_path):
     # 排除标注图混入
     if "._det" in str(image_path) or ".overlay" in str(image_path):
         image_path = str(image_path).replace("._det", "").replace(".overlay", "")
-    img = cv2.imread(str(image_path))
+    img = _imread_unicode(image_path)
     if img is None:
         return {"sharpness": 0, "brightness": 0, "yellow_ratio": 0,
                 "ok": False, "reason": "图片无法读取"}
@@ -164,7 +197,7 @@ def draw_detection_overlay(image_path, boxes, conf=0.25, out_path=None):
     if cv2 is None:
         # 无 cv2 时无法画框，返回 None（app 端已有"识别失败或图片无法读取"兜底提示）
         return None
-    img = cv2.imread(str(image_path))
+    img = _imread_unicode(image_path)
     if img is None:
         return None
     h, w = img.shape[:2]
@@ -177,6 +210,6 @@ def draw_detection_overlay(image_path, boxes, conf=0.25, out_path=None):
         cv2.putText(img, "No target detected", (w // 8, h // 2),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 2)
     if out_path is None:
-        out_path = str(Path(image_path).with_suffix(".overlay.jpg"))
-    cv2.imwrite(out_path, img)
+        out_path = _overlay_path(image_path)
+    _imwrite_unicode(out_path, img)
     return out_path

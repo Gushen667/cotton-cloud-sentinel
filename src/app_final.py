@@ -11,7 +11,9 @@ import streamlit as st
 import io
 import os
 import sys
+import time
 import hashlib
+import tempfile
 from datetime import datetime
 from PIL import Image
 
@@ -59,6 +61,38 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 MODEL_READY = find_model() is not None
+
+# ============ 识别/画框缓存与临时文件管理 ============
+# 上传图和叠加图都放系统临时目录，不污染项目根目录和数据集目录
+UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "mianyunshao_uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
+def cleanup_old_uploads(max_age_hours=48):
+    """清掉过期上传临时图，防止无限堆积。"""
+    try:
+        now = time.time()
+        for f in os.listdir(UPLOAD_DIR):
+            p = os.path.join(UPLOAD_DIR, f)
+            if now - os.path.getmtime(p) > max_age_hours * 3600:
+                os.remove(p)
+    except Exception:
+        pass
+
+
+cleanup_old_uploads()
+
+
+@st.cache_data(show_spinner="正在识别虫量（首次约需十几秒）...")
+def run_detection(image_path, mtime, conf=0.25):
+    """YOLO 识别结果按 图片路径+mtime 缓存：调参数（尺寸/天数/地区）不会重跑推理。"""
+    return detect(image_path, conf=conf)
+
+
+@st.cache_data(show_spinner=False)
+def build_overlay(image_path, mtime, boxes):
+    """检测框叠加图同样缓存，避免重复画框写盘。"""
+    return draw_detection_overlay(image_path, boxes)
 
 # ============ 会话管理函数（必须在侧栏前定义）============
 HISTORY_FILE = os.path.join(BASE_DIR, "history.json")
@@ -260,13 +294,17 @@ def run_pipeline(image_path, source_name):
     import numpy as np
     sid = st.session_state.current_session
     image_key = os.path.basename(image_path)
-    # --- 1. AI 识别 ---
-    detection = detect(image_path, conf=0.25)
+    # --- 1. AI 识别（带缓存：同图不重复推理） ---
+    try:
+        mtime = os.path.getmtime(image_path)
+    except OSError:
+        mtime = 0.0
+    detection = run_detection(image_path, mtime, 0.25)
     overlay = None
     if detection["boxes"]:
-        overlay = draw_detection_overlay(image_path, detection["boxes"])
+        overlay = build_overlay(image_path, mtime, detection["boxes"])
     elif detection["found"]:
-        overlay = draw_detection_overlay(image_path, [])  # 显示"未检出目标"
+        overlay = build_overlay(image_path, mtime, [])  # 显示"未检出目标"
 
     # --- 2. 气象 + 地区（用 session_state 记住上次选择） ---
     preset_coords = {
@@ -277,6 +315,11 @@ def run_pipeline(image_path, source_name):
     }
 
     # --- 3. 标准化虫量字段 ---
+    field_name = st.text_input(
+        "田块名称", value="演示田块",
+        help="将写入防控工单",
+        key=session_key("field_name"),
+    )
     trap_size = st.selectbox(
         "黄板尺寸",
         ["15×15cm", "20×20cm", "30×40cm", "其他"],
@@ -419,7 +462,9 @@ def run_pipeline(image_path, source_name):
         st.markdown(line)
 
     risk_detail_emoji = {"red": "🔴", "yellow": "🟡", "green": "🟢", "unknown": "⚪"}[risk["level"]]
-    st.markdown(f"### {risk_detail_emoji} {level_name}（风险指数 {risk['score']:.2f}）")
+    # 不可信时风险指数没有意义，显示 "--" 而不是误导性的数字
+    score_txt = f"{risk['score']:.2f}" if risk["level"] != "unknown" else "--"
+    st.markdown(f"### {risk_detail_emoji} {level_name}（风险指数 {score_txt}）")
     st.write(risk["advice"])
     if risk.get("quality_reason"):
         st.caption(f"可信度说明：{risk['quality_reason']}")
@@ -430,7 +475,7 @@ def run_pipeline(image_path, source_name):
 
     # --- 9. 采样导航 ---
     st.subheader("下次采样建议")
-    weather_score = risk["breakdown"]["气象适宜度(30%)"]
+    weather_score = risk["weather_score"]
     for h in next_sampling_hint(final_count, weather_score):
         st.write(f"- {h}")
 
@@ -441,7 +486,7 @@ def run_pipeline(image_path, source_name):
     st.markdown(f"""
     **工单摘要（{risk['timestamp']}）**
 
-    - 田块：演示田块（可替换为实际田块名）
+    - 田块：{field_name}
     - 黄板尺寸：{trap_area}
     - 挂板天数：{hang_days} 天
     - 拍摄时间：{shot_time}
@@ -463,8 +508,10 @@ def run_pipeline(image_path, source_name):
                 "region": region_choice,
                 "advice": risk["advice"],
             })
-        st.success("工单已生成并记录。处理后 3-7 天系统提醒复核。")
-        st.caption("✅ 本次识别已存档至当前会话（示例照片不计入）")
+            st.success("工单已生成并记录。处理后 3-7 天系统提醒复核。")
+            st.caption("✅ 本次识别已存档至当前会话")
+        else:
+            st.info("本次为示例照片，仅供演示，不生成工单记录。上传自己的照片后即可存档。")
     elif source_name == "示例照片":
         st.caption("本次为示例照片，仅供演示，不计入历史趋势。")
     # 当前会话趋势
@@ -507,7 +554,7 @@ active_src = ""
 if uploaded:
     img_bytes = uploaded.getvalue()
     digest = hashlib.sha1(img_bytes).hexdigest()[:12]
-    tmp_path = os.path.join(BASE_DIR, f"temp_upload_{sid}_{digest}.jpg")
+    tmp_path = os.path.join(UPLOAD_DIR, f"upload_{sid}_{digest}.jpg")
     with open(tmp_path, "wb") as f:
         f.write(img_bytes)
     st.session_state[example_key] = None

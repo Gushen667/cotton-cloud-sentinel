@@ -27,6 +27,8 @@ def get_weather(lat=None, lon=None):
             "wind_speed_10m",
             "wind_gusts_10m",
         ],
+        # Open-Meteo 默认风速单位是 km/h，这里明确要 m/s，否则展示口径差 3.6 倍
+        "wind_speed_unit": "ms",
         "forecast_days": 2,
         "timezone": "Asia/Shanghai",
     }
@@ -115,6 +117,7 @@ def assess_risk(pest_count, weather=None, crop_stage=None, last_treatment_days=3
         "advice": advice,
         "reliable": reliable,
         "quality_reason": quality_reason,
+        "weather_score": round(weather_score, 3),
         "breakdown": {
             "虫量压力(40%)": round(pressure, 3),
             "气象适宜度(30%)": round(weather_score, 3),
